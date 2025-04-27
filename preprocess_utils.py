@@ -26,16 +26,17 @@ def walk_over_files(directory):
 def parse_topic_file(content):
     extracted = {}
     lines = content.strip().split("\n")
-    for line in lines:
+    for idx, line in enumerate(lines):
         line = line.strip()
         if line.startswith("Topic:"):
             extracted["Topic"] = line[len("Topic:") :].strip()
         elif line.startswith("Title:"):
             extracted["Title"] = line[len("Title:") :].strip()
         elif line.startswith("Objective:"):
-            extracted["Objective"] = line[len("Objective:") :].strip()
+            extracted["Objective"] = " ".join(lines[idx:]).replace("Objective:", "")
+            continue
         elif line.startswith("Objectives:"):
-            extracted["Objective"] = line[len("Objectives:") :].strip()
+            extracted["Objective"] = " ".join(lines[idx:]).replace("Objectives:", "")
 
     if not ("Topic" in extracted and "Title" in extracted and "Objective" in extracted):
         print(Warning(f"Could not parse topic {extracted['Topic']}"))
