@@ -16,7 +16,7 @@ class TextDataset(Dataset):
         X,
         y,
         tokenizer=BertTokenizer.from_pretrained("bert-base-uncased"),
-        max_length=350,
+        max_length=1000,
     ):
         self.tokenizer = tokenizer
         self.max_length = max_length
