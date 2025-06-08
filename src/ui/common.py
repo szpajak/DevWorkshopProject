@@ -124,9 +124,9 @@ def preprocess(topic, df):
     return train_dataset, test_dataset, train_loader, test_loader
 
 
-def load_model_from_file():
+def load_model_from_file(topic):
     model = BERTClassifier()
-    model.load_state_dict(torch.load("./model.pt", map_location=torch.device("cpu")))
+    model.load_state_dict(torch.load(f"models/bert_classifier_{topic}_balanced.pt", map_location=torch.device("cpu")))
     return model
 
 
@@ -144,7 +144,7 @@ def get_top_topics(df):
 
 
 def get_raw_data():
-    DATA_PATH = "data"
+    DATA_PATH = "data/preprocessed"
     TRAIN_PATH = DATA_PATH + "/train.csv"
     TEST_PATH = DATA_PATH + "/test.csv"
     df_train = pd.read_csv(TRAIN_PATH)

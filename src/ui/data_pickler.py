@@ -10,17 +10,19 @@ from common import (
     preprocess,
 )
 
-model = load_model_from_file()
+topic = "CD011975"
+
+model = load_model_from_file(topic)
 tokenizer = get_tokenizer()
 
 
-def load_data():
+def load_data(topic):
     train_df, test_df = get_raw_data()
-    top_topics = get_top_topics(train_df)
-    return preprocess(topic=top_topics[0], df=train_df)
+    # top_topics = get_top_topics(train_df)
+    return preprocess(topic=topic, df=train_df)
 
 
-train_dataset, test_dataset, train_loader, test_loader = load_data()
+train_dataset, test_dataset, train_loader, test_loader = load_data(topic)
 
 shaps = {}
 
@@ -40,7 +42,7 @@ for i in range(test_dataset.X.shape[0]):
 
     print(f"Pickled {x.title[0:20]}...")
 
-shaps_file = open("shaps.pkl", "ab")
+shaps_file = open(f"shaps_{topic}.pkl", "ab")
 zakiszone = pickle.dumps(shaps, shaps_file)
 
 shaps_file.close()
