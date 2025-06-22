@@ -151,3 +151,8 @@ def get_raw_data():
     df_test = pd.read_csv(TEST_PATH)
 
     return (df_train, df_test)
+
+
+if __name__ == "__main__":
+    top_topics = get_top_topics(pd.concat(get_raw_data()))
+    print("Top topics:", top_topics.tolist()[:10])  # Display top 10 topics for brevity

@@ -1,16 +1,17 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import './App.css'; 
+import './App.css';
 
 interface TokenShapValue {
   token: string;
-  value: number; // SHAP value for the "Relevant" class
+  value: number;
 }
 
 interface ArticleShapData {
   title: string;
   abstract: string;
   verdict: string;
-  explained_text_parts: TokenShapValue[];
+  explained_title_parts: TokenShapValue[];
+  explained_abstract_parts: TokenShapValue[];
   top_words: TokenShapValue[];
 }
 
@@ -19,7 +20,13 @@ interface TopicDataResponse {
   articles: ArticleShapData[];
 }
 
-const API_BASE_URL = 'http://localhost:8000'; // Backend API URL
+const API_BASE_URL = 'http://localhost:8000';
+
+const topicDescriptions: Record<string, string> = {
+  CD011975: "Title: First trimester serum tests for Down's syndrome screening ",
+  CD012599: "Title: First and second trimester serum tests with and without first trimester ultrasound tests for Down's syndrome screening ",
+  CD010213: "Title: Imaging modalities for characterising focal pancreatic lesions "
+};
 
 function App() {
   const [topics, setTopics] = useState<string[]>([]);
@@ -28,6 +35,7 @@ function App() {
   const [selectedArticleIndex, setSelectedArticleIndex] = useState<number | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [error, setError] = useState<string | null>(null);
+  const [userVerdicts, setUserVerdicts] = useState<Record<number, string>>({});
 
   useEffect(() => {
     const fetchTopics = async () => {
@@ -39,8 +47,10 @@ function App() {
           const errorData = await response.json().catch(() => ({ detail: response.statusText }));
           throw new Error(`Failed to fetch topics: ${errorData.detail || response.statusText}`);
         }
-        const data: string[] = await response.json();
-        setTopics(data);
+        const rawTopics: string[] = await response.json();
+        const baseTopicSet = new Set<string>();
+        rawTopics.forEach(t => baseTopicSet.add(t.split('_')[0]));
+        setTopics(Array.from(baseTopicSet));
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
       } finally {
@@ -51,12 +61,30 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (!currentTopicData || selectedArticleIndex === null) return;
+      if (event.key === 'ArrowLeft' && selectedArticleIndex > 0) {
+        setSelectedArticleIndex(prev => prev !== null ? prev - 1 : prev);
+      }
+      if (
+        event.key === 'ArrowRight' &&
+        selectedArticleIndex < currentTopicData.articles.length - 1
+      ) {
+        setSelectedArticleIndex(prev => prev !== null ? prev + 1 : prev);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedArticleIndex, currentTopicData]);
+
+  useEffect(() => {
     if (selectedTopic) {
       const fetchShapData = async () => {
         setIsLoading(true);
         setError(null);
         setCurrentTopicData(null);
         setSelectedArticleIndex(null);
+        setUserVerdicts({});
         try {
           const response = await fetch(`${API_BASE_URL}/shap_data/${selectedTopic}`);
           if (!response.ok) {
@@ -66,7 +94,7 @@ function App() {
           const data: TopicDataResponse = await response.json();
           setCurrentTopicData(data);
           if (data.articles && data.articles.length > 0) {
-            setSelectedArticleIndex(0); // Auto-select first article
+            setSelectedArticleIndex(0);
           } else {
             setError(`No articles found for topic ${selectedTopic}.`);
           }
@@ -88,18 +116,9 @@ function App() {
     return null;
   }, [currentTopicData, selectedArticleIndex]);
 
-  // DEBUGGING: Log currentArticle and its relevant parts when it changes
-  useEffect(() => {
-    if (currentArticle) {
-      console.log("Current Article Data Received by Frontend:", currentArticle);
-      console.log("Explained Text Parts:", currentArticle.explained_text_parts);
-      console.log("Top Words:", currentArticle.top_words);
-    }
-  }, [currentArticle]);
-
-
   const handleTopicChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
-    setSelectedTopic(event.target.value || null);
+    const baseId = event.target.value.split('_')[0];
+    setSelectedTopic(baseId || null);
   };
 
   const handleArticleChange = (event: React.ChangeEvent<HTMLSelectElement>) => {
@@ -107,56 +126,46 @@ function App() {
     setSelectedArticleIndex(isNaN(index) ? null : index);
   };
 
+  const handleUserVerdict = (verdict: string) => {
+    if (selectedArticleIndex !== null) {
+      setUserVerdicts(prev => ({ ...prev, [selectedArticleIndex]: verdict }));
+    }
+  };
+
   const getShapColor = (value: number, maxValue: number = 0.5): string => {
     if (value === 0) return 'transparent';
-    const intensity = Math.min(Math.abs(value) / maxValue, 1); 
-    const alpha = intensity * 0.6 + 0.1; 
-    if (value > 0.001) {
-      return `rgba(0, 128, 0, ${alpha})`; 
-    } else if (value < -0.001) {
-      return `rgba(255, 0, 0, ${alpha})`; 
-    }
+    const intensity = Math.min(Math.abs(value) / maxValue, 1);
+    const alpha = intensity * 0.6 + 0.1;
+    if (value > 0.001) return `rgba(0, 128, 0, ${alpha})`;
+    if (value < -0.001) return `rgba(255, 0, 0, ${alpha})`;
     return 'transparent';
   };
 
-  const renderShapText = (parts: TokenShapValue[]) => {
+  const renderShapText = (parts: TokenShapValue[], defaultText: string) => {
     if (!parts || parts.length === 0) {
-      return <p><em>SHAP text data is not available for highlighting.</em></p>;
+      return <p><em>{defaultText}</em></p>;
     }
-    // const maxAbsValue = parts.reduce((max, p) => Math.max(max, Math.abs(p.value)), 0.00001);
-
     return parts.map((part, index) => {
-      let tokenText = part.token;
-      let addSpaceBefore = index > 0; 
-      if (tokenText.startsWith("##")) {
-        tokenText = tokenText.substring(2); 
-        addSpaceBefore = false; 
-      } else if (index > 0) {
-        const prevToken = parts[index-1].token;
-        if (tokenText.match(/^[,.!?':;\]\)\}\-\–\—]$/)) { 
-            addSpaceBefore = false;
-        } else if (prevToken.match(/[\(\[\{\"\']$/)) { 
-            addSpaceBefore = false;
-        }
-      }
+      const leadingSpace = index > 0 && part.token.match(/^\w/) ? ' ' : '';
       return (
         <React.Fragment key={index}>
-          {addSpaceBefore && ' '}
-          <span 
-            style={{ 
-              backgroundColor: getShapColor(part.value /*, maxAbsValue */), 
-              padding: '1px 0', 
-              margin: '0',       
-              borderRadius: '3px' 
+          {leadingSpace}
+          <span
+            style={{
+              backgroundColor: getShapColor(part.value),
+              padding: '1px 0',
+              borderRadius: '3px'
             }}
-            title={`SHAP value: ${part.value.toFixed(5)}`} 
+            title={`SHAP value: ${part.value.toFixed(5)}`}
           >
-            {tokenText}
+            {part.token}
           </span>
         </React.Fragment>
       );
     });
   };
+
+  const currentUserVerdict = selectedArticleIndex !== null ? userVerdicts[selectedArticleIndex] : null;
 
   return (
     <div className="App">
@@ -178,13 +187,19 @@ function App() {
             </select>
           </div>
 
+          {selectedTopic && topicDescriptions[selectedTopic] && (
+            <div className="topic-description">
+              <h2>{topicDescriptions[selectedTopic]}</h2>
+            </div>
+          )}
+
           {selectedTopic && currentTopicData && (
             <div className="control-group">
               <label htmlFor="article-select">Choose an Article:</label>
-              <select 
-                id="article-select" 
-                onChange={handleArticleChange} 
-                value={selectedArticleIndex !== null ? selectedArticleIndex : ''} 
+              <select
+                id="article-select"
+                onChange={handleArticleChange}
+                value={selectedArticleIndex !== null ? selectedArticleIndex : ''}
                 disabled={isLoading || !currentTopicData.articles.length}
               >
                 <option value="" disabled={selectedArticleIndex !== null}>-- Select Article --</option>
@@ -200,30 +215,65 @@ function App() {
 
         {currentArticle && (
           <div className="article-details">
-            {/* Integrated SHAP-highlighted text (replaces separate title and abstract) */}
-            <div className="shap-text-display main-highlighted-text">
-              {currentArticle.explained_text_parts && currentArticle.explained_text_parts.length > 0 ?
-                renderShapText(currentArticle.explained_text_parts)
-                :
-                ( /* Fallback to plain title and abstract if SHAP parts are missing */
-                  <>
-                    <h2>{currentArticle.title}</h2> 
-                    {currentArticle.abstract && (
-                      <div className="abstract-section">
-                        <strong>Abstract:</strong>
-                        <p>{currentArticle.abstract}</p>
-                      </div>
-                    )}
-                    <p><em>SHAP highlighting data is not available for this article.</em></p>
-                  </>
-                )
-              }
+            <div className="shap-text-display">
+              <div className="article-nav-buttons">
+                <button
+                  onClick={() => setSelectedArticleIndex((prev) => (prev !== null && prev > 0 ? prev - 1 : prev))}
+                  disabled={selectedArticleIndex === null || selectedArticleIndex <= 0}
+                >
+                  ← Previous
+                </button>
+                <button
+                  onClick={() => setSelectedArticleIndex((prev) =>
+                    prev !== null && currentTopicData && prev < currentTopicData.articles.length - 1 ? prev + 1 : prev
+                  )}
+                  disabled={
+                    selectedArticleIndex === null ||
+                    !currentTopicData ||
+                    selectedArticleIndex >= currentTopicData.articles.length - 1
+                  }
+                >
+                  Next →
+                </button>
+              </div>
+              <h2 className="article-title">
+                {renderShapText(currentArticle.explained_title_parts, currentArticle.title || 'Title not available.')}
+              </h2>
+              <div className="abstract-section">
+                <strong>Abstract:</strong>
+                <p>
+                  {renderShapText(currentArticle.explained_abstract_parts, currentArticle.abstract || 'Abstract not available.')}
+                </p>
+              </div>
             </div>
 
-            <p className="verdict"><strong>Verdict:</strong> <span className={currentArticle.verdict?.toLowerCase()}>{currentArticle.verdict}</span></p>
-            
+            <div className="verdict-section">
+              <p className="verdict">
+                <strong>Model Suggestion:</strong>{' '}
+                <span className={currentArticle.verdict?.toLowerCase()}>{currentArticle.verdict}</span>
+              </p>
+
+              <p className="user-verdict">
+                <strong>Your Verdict:</strong>{' '}
+                {currentUserVerdict ? (
+                  <span className={currentUserVerdict.toLowerCase()}>{currentUserVerdict}</span>
+                ) : (
+                  <em>Not selected</em>
+                )}
+              </p>
+
+              <div className="verdict-buttons">
+                <button onClick={() => handleUserVerdict('Relevant')} className="verdict-btn relevant">
+                  Mark as Relevant
+                </button>
+                <button onClick={() => handleUserVerdict('Irrelevant')} className="verdict-btn irrelevant">
+                  Mark as Irrelevant
+                </button>
+              </div>
+            </div>
+
             <div className="top-words">
-              <h3>Top 5 Contributing Words (for Relevancy)</h3>
+              <h3>Top 5 Words Contributing to '{currentArticle.verdict}' Verdict</h3>
               {currentArticle.top_words && currentArticle.top_words.length > 0 ? (
                 <ul>
                   {currentArticle.top_words.map((word, index) => (

@@ -6,18 +6,19 @@ import glob
 import os
 from typing import List, Dict, Any, Optional
 import numpy as np
+import re
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"], 
+    allow_origins=["http://localhost:3000"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-SHAP_DIR = "../shap/" 
+SHAP_DIR = "../shap/"
 
 class TokenShapValue(BaseModel):
     token: str
@@ -27,7 +28,8 @@ class ArticleShapData(BaseModel):
     title: str
     abstract: str
     verdict: str
-    explained_text_parts: List[TokenShapValue]
+    explained_title_parts: List[TokenShapValue]
+    explained_abstract_parts: List[TokenShapValue]
     top_words: List[TokenShapValue]
 
 class TopicDataResponse(BaseModel):
@@ -35,130 +37,69 @@ class TopicDataResponse(BaseModel):
     articles: List[ArticleShapData]
 
 def get_relevant_class_index(output_names: List[Any], target_class: str = "Relevant") -> Optional[int]:
-    print(f"    get_relevant_class_index: Received output_names type {type(output_names)}, content: {str(output_names)[:100]}")
-    processed_output_names_for_index: List[str] = []
-    if isinstance(output_names, np.ndarray):
-        processed_output_names_for_index = [str(name) for name in output_names.tolist()]
-    elif isinstance(output_names, list):
-        processed_output_names_for_index = [str(name) for name in output_names]
-    else:
-        print(f"    get_relevant_class_index: output_names is not list or ndarray. Defaulting to index 1 if binary.")
-        # Cannot determine length reliably if not list/ndarray
-        return 1 if target_class == "Relevant" else 0 # Simplified fallback for now
-
-    print(f"    get_relevant_class_index: Processed names for index search: {processed_output_names_for_index}")
+    """Finds the index of the target class in the list of output names."""
+    processed_names = [str(name) for name in output_names]
     try:
-        return processed_output_names_for_index.index(target_class)
+        return processed_names.index(target_class)
     except ValueError:
-        print(f"    Warning: '{target_class}' not found in processed_output_names: {processed_output_names_for_index}.")
-        if target_class == "Relevant" and "LABEL_1" in processed_output_names_for_index:
-            idx = processed_output_names_for_index.index("LABEL_1")
-            print(f"      Found 'LABEL_1' at index {idx} as fallback for 'Relevant'.")
-            return idx
-        if len(processed_output_names_for_index) == 2: 
-            print(f"      Assuming index 1 for '{target_class}' (binary fallback).")
+        if target_class == "Relevant" and "LABEL_1" in processed_names:
+            return processed_names.index("LABEL_1")
+        if len(processed_names) == 2:
             return 1
-        if len(processed_output_names_for_index) == 1: 
-            print(f"      Assuming index 0 for '{target_class}' (unary fallback).")
-            return 0
-    print(f"    Error: Could not definitively determine index for '{target_class}' from: {processed_output_names_for_index}")
     return None
 
 
 def process_raw_shap_explanation(explanation_obj: Any) -> Dict[str, Any]:
-    print("  process_raw_shap_explanation: Entered function.")
-    parsed_tokens: List[str] = []
-    parsed_scores_per_class: List[List[float]] = []
-    current_output_names: List[str] = ["Irrelevant", "Relevant"] # Default
-
+    """
+    Processes a SHAP explanation object, expecting word-level tokens.
+    """
     if explanation_obj is None:
-        print("  process_raw_shap_explanation: Received None explanation_obj. Returning empty.")
-        return {"tokens": [], "scores_per_class": [], "output_class_names": current_output_names}
+        return {"tokens": [], "scores_per_class": [], "output_class_names": []}
 
-    print(f"  process_raw_shap_explanation: explanation_obj type: {type(explanation_obj)}")
+    tokens = getattr(explanation_obj, 'data', [])
+    scores_per_class = getattr(explanation_obj, 'values', np.array([]))
+    output_class_names = getattr(explanation_obj, 'output_names', [])
 
-    data_attr = getattr(explanation_obj, 'data', None)
-    values_attr = getattr(explanation_obj, 'values', None)
-    output_names_attr = getattr(explanation_obj, 'output_names', None)
+    if isinstance(tokens, np.ndarray):
+        tokens = tokens.tolist()
+    if isinstance(output_class_names, np.ndarray):
+        output_class_names = output_class_names.tolist()
 
-    print(f"    Initial data_attr type: {type(data_attr)}")
-    if data_attr is not None: print(f"    Initial data_attr content (first 5 if tuple/list else N/A): {str(data_attr[:5]) if isinstance(data_attr, (tuple,list)) and len(data_attr)>0 else str(data_attr)[:200]}")
+    if not isinstance(tokens, list) or not isinstance(scores_per_class, np.ndarray) or scores_per_class.ndim != 2:
+        return {"tokens": [], "scores_per_class": [], "output_class_names": []}
     
-    print(f"    Initial values_attr type: {type(values_attr)}")
-    if values_attr is not None: print(f"    Initial values_attr shape (if ndarray): {values_attr.shape if isinstance(values_attr, np.ndarray) else 'N/A'}, dtype: {values_attr.dtype if hasattr(values_attr, 'dtype') else 'N/A'}")
-    
-    print(f"    Initial output_names_attr type: {type(output_names_attr)}, content: {str(output_names_attr)[:200]}")
+    if len(tokens) != scores_per_class.shape[0]:
+        return {"tokens": [], "scores_per_class": [], "output_class_names": []}
 
-    if output_names_attr is not None:
-        if isinstance(output_names_attr, np.ndarray):
-            current_output_names = [str(name) for name in output_names_attr.tolist()]
-        elif isinstance(output_names_attr, list):
-            current_output_names = [str(name) for name in output_names_attr]
-        else:
-            print(f"    Warning: output_names_attr is of unexpected type: {type(output_names_attr)}. Using default: {current_output_names}")
-    else:
-        print(f"    Warning: output_names_attr is None. Using default: {current_output_names}")
-            
-    num_expected_classes = len(current_output_names)
-    print(f"    Determined num_expected_classes: {num_expected_classes} from current_output_names: {current_output_names}")
-
-    # Condition 1: Complex SHAP structure (tuple of arrays for data, object array of arrays for values)
-    cond1_data_is_tuple = isinstance(data_attr, tuple)
-    cond1_values_is_ndarray = isinstance(values_attr, np.ndarray)
-    cond1_values_dtype_is_object = values_attr.dtype == 'object' if cond1_values_is_ndarray else False
-    cond1_lengths_match = len(data_attr) == len(values_attr) if cond1_data_is_tuple and cond1_values_is_ndarray else False
-    
-    print(f"    Complex structure check: data_is_tuple={cond1_data_is_tuple}, values_is_ndarray={cond1_values_is_ndarray}, values_dtype_is_object={cond1_values_dtype_is_object}, lengths_match={cond1_lengths_match}")
-
-    if cond1_data_is_tuple and cond1_values_is_ndarray and cond1_values_dtype_is_object and cond1_lengths_match:
-        print(f"    Attempting to parse complex SHAP structure: {len(data_attr)} token parts.")
-        processed_count = 0
-        for idx, (token_part_array, value_part_array) in enumerate(zip(data_attr, values_attr)):
-            # Inner conditions for each part
-            c_token_np = isinstance(token_part_array, np.ndarray)
-            c_token_ndim1 = token_part_array.ndim == 1 if c_token_np else False
-            c_token_len3 = len(token_part_array) == 3 if c_token_np and c_token_ndim1 else False
-            
-            c_value_np = isinstance(value_part_array, np.ndarray)
-            c_value_ndim2 = value_part_array.ndim == 2 if c_value_np else False
-            c_value_shape0_3 = value_part_array.shape[0] == 3 if c_value_np and c_value_ndim2 else False
-            c_value_shape1_ok = value_part_array.shape[1] == num_expected_classes if c_value_np and c_value_ndim2 else False
-            
-            if (c_token_np and c_token_ndim1 and c_token_len3 and
-                c_value_np and c_value_ndim2 and c_value_shape0_3 and c_value_shape1_ok):
-                actual_token = str(token_part_array[1])
-                token_scores = [float(v) for v in value_part_array[1, :].tolist()]
-                parsed_tokens.append(actual_token)
-                parsed_scores_per_class.append(token_scores)
-                processed_count +=1
-            else:
-                print(f"      Skipping part {idx}: Condition failed.")
-                print(f"        token_part: type={type(token_part_array)}, ndim={token_part_array.ndim if c_token_np else 'N/A'}, len={len(token_part_array) if c_token_np and c_token_ndim1 else 'N/A'}")
-                print(f"        value_part: type={type(value_part_array)}, ndim={value_part_array.ndim if c_value_np else 'N/A'}, shape={value_part_array.shape if c_value_np and c_value_ndim2 else 'N/A'}")
-                print(f"        Conditions: c_token_np={c_token_np}, c_token_ndim1={c_token_ndim1}, c_token_len3={c_token_len3}")
-                print(f"                      c_value_np={c_value_np}, c_value_ndim2={c_value_ndim2}, c_value_shape0_3={c_value_shape0_3}, c_value_shape1_ok={c_value_shape1_ok} (expected classes: {num_expected_classes})")
-        print(f"    Finished complex structure parsing. Processed {processed_count} parts.")
-
-    # Condition 2: Flatter SHAP structure (list/array for data, 2D array for values)
-    elif isinstance(data_attr, (list, np.ndarray)) and isinstance(values_attr, np.ndarray) and values_attr.ndim == 2:
-        print(f"    Attempting to parse flat SHAP structure. Data len: {len(data_attr)}, Values shape: {values_attr.shape}")
-        if len(data_attr) == values_attr.shape[0] and values_attr.shape[1] == num_expected_classes:
-            parsed_tokens = [str(t) for t in data_attr]
-            parsed_scores_per_class = [[float(v) for v in row] for row in values_attr.tolist()]
-            print(f"      Successfully parsed flat structure. Tokens: {len(parsed_tokens)}")
-        else:
-            print(f"      Warning: Flat SHAP data length or class count mismatch. Tokens: {len(data_attr)}, Values shape: {values_attr.shape}, Expected classes: {num_expected_classes}")
-    else:
-        print(f"    Warning: Raw SHAP .data or .values not in a recognized format for either complex or flat parsing.")
-
-    print(f"  process_raw_shap_explanation: Returning {len(parsed_tokens)} tokens and {len(parsed_scores_per_class)} score sets.")
     return {
-        "tokens": parsed_tokens,
-        "scores_per_class": parsed_scores_per_class,
-        "output_class_names": current_output_names
+        "tokens": [str(t) for t in tokens],
+        "scores_per_class": scores_per_class.tolist(),
+        "output_class_names": [str(n) for n in output_class_names]
     }
 
-# process_article_for_api and other endpoints remain the same as in the previous good backend version
+
+def create_explained_parts(processed_shap_data: Dict[str, Any], relevant_idx: int) -> List[TokenShapValue]:
+    """Helper to create a list of TokenShapValue from processed SHAP data."""
+    explained_parts: List[TokenShapValue] = []
+    tokens: List[str] = processed_shap_data.get("tokens", [])
+    scores_per_class: List[List[float]] = processed_shap_data.get("scores_per_class", [])
+
+    if not tokens or not scores_per_class:
+        return []
+
+    for i, token_str in enumerate(tokens):
+        try:
+            if i < len(scores_per_class) and relevant_idx < len(scores_per_class[i]):
+                relevant_score = float(scores_per_class[i][relevant_idx])
+                explained_parts.append(TokenShapValue(token=token_str, value=relevant_score))
+            else:
+                explained_parts.append(TokenShapValue(token=token_str, value=0.0))
+        except (TypeError, ValueError) as e:
+            print(f"    Error processing score for token '{token_str}': {e}. Using 0.0.")
+            explained_parts.append(TokenShapValue(token=token_str, value=0.0))
+    return explained_parts
+
+
 def process_article_for_api(article_data_raw: Dict[str, Any]) -> ArticleShapData:
     article_title = str(article_data_raw.get("title", "N/A"))
     article_abstract = str(article_data_raw.get("abstract", ""))
@@ -166,53 +107,66 @@ def process_article_for_api(article_data_raw: Dict[str, Any]) -> ArticleShapData
 
     print(f"\nProcessing article for API: {article_title[:60]}")
 
-    raw_shap_explanation = article_data_raw.get("shap_values") 
-    processed_shap_data = process_raw_shap_explanation(raw_shap_explanation)
+    raw_shap_title = article_data_raw.get("shap_title_values")
+    raw_shap_abstract = article_data_raw.get("shap_abstract_values")
 
-    tokens: List[str] = processed_shap_data.get("tokens", [])
-    scores_per_class: List[List[float]] = processed_shap_data.get("scores_per_class", [])
-    output_class_names: List[str] = processed_shap_data.get("output_class_names", ["Irrelevant", "Relevant"])
+    processed_title_data = process_raw_shap_explanation(raw_shap_title)
+    processed_abstract_data = process_raw_shap_explanation(raw_shap_abstract)
 
-    if not tokens or not scores_per_class: # This is the warning user saw
-        print(f"  Warning: Parsed tokens or scores_per_class are empty for article: {article_title}. Tokens: {len(tokens)}, Scores: {len(scores_per_class)}")
-        return ArticleShapData(title=article_title, abstract=article_abstract, verdict=article_verdict, explained_text_parts=[], top_words=[])
-
-    if len(tokens) != len(scores_per_class):
-        print(f"  Error: Mismatch between parsed token count ({len(tokens)}) and scores count ({len(scores_per_class)})")
-        explained_text_parts = [TokenShapValue(token=t, value=0.0) for t in tokens] if tokens else []
-        return ArticleShapData(title=article_title, abstract=article_abstract, verdict=article_verdict, explained_text_parts=explained_text_parts, top_words=[])
-
-    relevant_idx = get_relevant_class_index(output_class_names, "Relevant")
-
-    if relevant_idx is None:
-        print(f"  Error: Could not determine 'Relevant' class index from {output_class_names}")
-        explained_text_parts = [TokenShapValue(token=t, value=0.0) for t in tokens]
-        return ArticleShapData(title=article_title, abstract=article_abstract, verdict=article_verdict, explained_text_parts=explained_text_parts, top_words=[])
-
-    explained_text_parts: List[TokenShapValue] = []
-    for i, token_str in enumerate(tokens):
-        try:
-            if relevant_idx < len(scores_per_class[i]):
-                relevant_score = float(scores_per_class[i][relevant_idx])
-                explained_text_parts.append(TokenShapValue(token=token_str, value=relevant_score))
-            else:
-                print(f"    Warning: relevant_idx {relevant_idx} out of bounds for scores of token '{token_str}' (scores: {scores_per_class[i]}). Using 0.0.")
-                explained_text_parts.append(TokenShapValue(token=token_str, value=0.0))
-        except (IndexError, TypeError, ValueError) as e:
-            print(f"    Error processing score for token '{token_str}': {e}. Scores: {scores_per_class[i] if i < len(scores_per_class) else 'N/A'}. Using 0.0.")
-            explained_text_parts.append(TokenShapValue(token=token_str, value=0.0))
-            
-    top_words: List[TokenShapValue] = []
-    if explained_text_parts:
-        word_importances = sorted(explained_text_parts, key=lambda x: abs(x.value), reverse=True)
-        top_words = word_importances[:5]
+    # Use output names from title or abstract if available, they should be the same
+    output_class_names = processed_title_data.get("output_class_names") or processed_abstract_data.get("output_class_names", [])
     
-    print(f"  Successfully processed for API. Explained parts: {len(explained_text_parts)}, Top words: {len(top_words)}")
+    relevant_idx = get_relevant_class_index(output_class_names, "Relevant")
+    if relevant_idx is None:
+        print(f"  Error: Could not determine 'Relevant' class index from {output_class_names}. Cannot process SHAP values.")
+        return ArticleShapData(title=article_title, abstract=article_abstract, verdict=article_verdict, explained_title_parts=[], explained_abstract_parts=[], top_words=[])
+
+    explained_title_parts = create_explained_parts(processed_title_data, relevant_idx)
+    explained_abstract_parts = create_explained_parts(processed_abstract_data, relevant_idx)
+
+    # Combine all parts for top words calculation
+    all_explained_parts = explained_title_parts + explained_abstract_parts
+    
+    top_words: List[TokenShapValue] = []
+    if all_explained_parts:
+        # Filter out non-alphabetic tokens (like punctuation, numbers) and empty/whitespace tokens.
+        # A token is considered a word if it contains at least one letter.
+        word_tokens_for_sorting = [
+            part for part in all_explained_parts if part.token.strip() and re.search(r'[a-zA-Z]', part.token)
+        ]
+        
+        # Sort based on the article's verdict
+        if article_verdict == "Relevant":
+            # For "Relevant" articles, find words with the highest positive scores
+            word_importances = sorted(word_tokens_for_sorting, key=lambda x: x.value, reverse=True)
+        elif article_verdict == "Irrelevant":
+            # For "Irrelevant" articles, find words with the most negative scores
+            word_importances = sorted(word_tokens_for_sorting, key=lambda x: x.value, reverse=False)
+        else:
+            # Fallback for any other verdict: sort by absolute impact
+            word_importances = sorted(word_tokens_for_sorting, key=lambda x: abs(x.value), reverse=True)
+
+        # Ensure uniqueness (case-insensitive) and get top 5
+        unique_top_words: List[TokenShapValue] = []
+        seen_tokens = set()
+        for part in word_importances:
+            if len(unique_top_words) >= 5:
+                break
+            # Normalize token for uniqueness check (lowercase)
+            normalized_token = part.token.lower()
+            if normalized_token not in seen_tokens:
+                seen_tokens.add(normalized_token)
+                unique_top_words.append(part)
+        
+        top_words = unique_top_words
+
+    print(f"  Successfully processed for API. Title parts: {len(explained_title_parts)}, Abstract parts: {len(explained_abstract_parts)}, Top words: {len(top_words)}")
     return ArticleShapData(
         title=article_title,
         abstract=article_abstract,
         verdict=article_verdict,
-        explained_text_parts=explained_text_parts,
+        explained_title_parts=explained_title_parts,
+        explained_abstract_parts=explained_abstract_parts,
         top_words=top_words,
     )
 
@@ -232,28 +186,38 @@ async def list_topics():
 
 @app.get("/shap_data/{topic_name}", response_model=TopicDataResponse)
 async def get_shap_data_for_topic(topic_name: str):
-    file_path = os.path.join(SHAP_DIR, f"shaps_{topic_name}.pkl")
-    abs_file_path = os.path.abspath(file_path)
-    print(f"Attempting to load SHAP data from: {abs_file_path}")
+    # Find all matching SHAP files for the topic
+    file_pattern = os.path.join(SHAP_DIR, f"shaps_{topic_name}*.pkl")
+    matching_files = sorted(glob.glob(file_pattern))
 
-    if not os.path.exists(file_path):
-        raise HTTPException(status_code=404, detail=f"SHAP data file for topic '{topic_name}' not found at {abs_file_path}.")
+    if not matching_files:
+        raise HTTPException(status_code=404, detail=f"No SHAP data files found for topic '{topic_name}' in path {SHAP_DIR}.")
 
-    try:
-        with open(file_path, "rb") as f:
-            shaps_list_for_topic = pickle.load(f)
-    except Exception as e:
-        print(f"Error loading or unpickling SHAP data for {abs_file_path}: {e}")
-        raise HTTPException(status_code=500, detail=f"Error loading or unpickling SHAP data for '{topic_name}'. Error: {e}")
+    shaps_list_for_topic: List[Dict[str, Any]] = []
 
-    if not isinstance(shaps_list_for_topic, list):
-        raise HTTPException(status_code=500, detail=f"SHAP data file for '{topic_name}' does not contain a list. Type: {type(shaps_list_for_topic)}")
+    for file_path in matching_files:
+        abs_file_path = os.path.abspath(file_path)
+        print(f"Loading SHAP data from: {abs_file_path}")
+
+        try:
+            with open(file_path, "rb") as f:
+                loaded_data = pickle.load(f)
+                if isinstance(loaded_data, list):
+                    shaps_list_for_topic.extend(loaded_data)
+                else:
+                    print(f"  Warning: Data in {file_path} is not a list. Skipping.")
+        except Exception as e:
+            print(f"  Error loading file {file_path}: {e}. Skipping.")
+            continue
+
+    if not shaps_list_for_topic:
+        raise HTTPException(status_code=500, detail=f"No valid SHAP data found for topic '{topic_name}'.")
 
     processed_articles_for_api: List[ArticleShapData] = []
     for i, article_data_raw in enumerate(shaps_list_for_topic):
         if not isinstance(article_data_raw, dict):
-            print(f"  Warning: Article data at index {i} for topic '{topic_name}' is not a dict. Skipping.")
+            print(f"  Warning: Article data at index {i} in topic '{topic_name}' is not a dict. Skipping.")
             continue
         processed_articles_for_api.append(process_article_for_api(article_data_raw))
-            
+
     return TopicDataResponse(topic_name=topic_name, articles=processed_articles_for_api)
