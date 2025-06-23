@@ -14,9 +14,9 @@ from common import (
     preprocess,
 )
 
-# 'CD009925', 'CD011984', 'CD012165', 'CD012010', 
+# CD012179,   CD010502,    CD11431
 
-topic = "CD012165" # Example topic, consider making this configurable
+topic = "CD012010" # Example topic, consider making this configurable
 
 model = load_model_from_file(topic)
 tokenizer = get_tokenizer()
@@ -45,8 +45,8 @@ label_map = {
 
 articles_to_process = []
 # num_items_to_process = min(2, len(test_dataset.X))
-start = 0
-stop = 10
+start = 10
+stop = 25
 
 for i in range(start, stop):
     row = test_dataset.X.iloc[i]

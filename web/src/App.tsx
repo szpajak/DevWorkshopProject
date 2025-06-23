@@ -25,7 +25,11 @@ const API_BASE_URL = 'http://localhost:8000';
 const topicDescriptions: Record<string, string> = {
   CD011975: "Title: First trimester serum tests for Down's syndrome screening ",
   CD012599: "Title: First and second trimester serum tests with and without first trimester ultrasound tests for Down's syndrome screening ",
-  CD010213: "Title: Imaging modalities for characterising focal pancreatic lesions "
+  CD010213: "Title: Imaging modalities for characterising focal pancreatic lesions ",
+  CD009925: "Title: Second trimester serum tests for Down's Syndrome screening ",
+  CD011984: "Title: Urine tests for Down's syndrome screening",
+  CD012010: "Title: Serum amylase and lipase and urinary trypsinogen and amylase for diagnosis of acute pancreatitis",
+  CD012165: "Title: Endometrial biomarkers for the non-invasive diagnosis of endometriosis"
 };
 
 function App() {
@@ -136,8 +140,8 @@ function App() {
     if (value === 0) return 'transparent';
     const intensity = Math.min(Math.abs(value) / maxValue, 1);
     const alpha = intensity * 0.6 + 0.1;
-    if (value > 0.001) return `rgba(0, 128, 0, ${alpha})`;
-    if (value < -0.001) return `rgba(255, 0, 0, ${alpha})`;
+    if (value > 0.001) return `rgba(255, 0, 0, ${alpha})`;
+    if (value < -0.001) return `rgba(0, 128, 0, ${alpha})`;
     return 'transparent';
   };
 
@@ -170,7 +174,7 @@ function App() {
   return (
     <div className="App">
       <header className="App-header">
-        <h1>SHAP Value Interpretation</h1>
+        <h1>XAI for Citation Screening</h1>
       </header>
       <main className="App-main">
         {isLoading && <p className="loading-message">Loading...</p>}
@@ -250,9 +254,20 @@ function App() {
             <div className="verdict-section">
               <p className="verdict">
                 <strong>Model Suggestion:</strong>{' '}
-                <span className={currentArticle.verdict?.toLowerCase()}>{currentArticle.verdict}</span>
+                <span className={
+                  currentArticle.verdict === 'Relevant'
+                    ? 'irrelevant'
+                    : currentArticle.verdict === 'Irrelevant'
+                      ? 'relevant'
+                      : currentArticle.verdict?.toLowerCase()
+                }>
+                  {currentArticle.verdict === 'Relevant'
+                    ? 'Irrelevant'
+                    : currentArticle.verdict === 'Irrelevant'
+                      ? 'Relevant'
+                      : currentArticle.verdict}
+                </span>
               </p>
-
               <p className="user-verdict">
                 <strong>Your Verdict:</strong>{' '}
                 {currentUserVerdict ? (
@@ -273,11 +288,17 @@ function App() {
             </div>
 
             <div className="top-words">
-              <h3>Top 5 Words Contributing to '{currentArticle.verdict}' Verdict</h3>
+              <h3>Top 5 Words Contributing to '{
+                currentArticle.verdict === 'Relevant'
+                    ? 'Irrelevant'
+                    : currentArticle.verdict === 'Irrelevant'
+                      ? 'Relevant'
+                      : currentArticle.verdict
+              }' Verdict</h3>
               {currentArticle.top_words && currentArticle.top_words.length > 0 ? (
                 <ul>
                   {currentArticle.top_words.map((word, index) => (
-                    <li key={index} style={{ color: word.value > 0 ? 'darkgreen' : 'darkred' }}>
+                    <li key={index} style={{ color: word.value > 0 ? 'darkred' : 'darkgreen' }}>
                       "{word.token}": {word.value.toFixed(4)}
                     </li>
                   ))}
